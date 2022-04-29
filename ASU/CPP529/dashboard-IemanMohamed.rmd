@@ -1,0 +1,737 @@
+---
+title: "Models of Neighborhood Change in YOUR CITY NAME"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: bootstrap
+    source: embed
+    smart: false
+runtime: shiny
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = TRUE, message=F, warning=F, fig.width=10, fig.height = 6 )
+```
+
+
+```{r, include=FALSE}
+
+# PACKAGES 
+
+
+# dashboard layout, widgets, and uploading
+
+library( flexdashboard )
+library( shiny )
+library( rsconnect )
+
+# data wrangling 
+
+library( dplyr )
+
+
+# formatting output
+
+library( DT )
+library( pander )
+library( knitr )
+library( stargazer )
+
+
+# maps
+
+library( ggmap )
+library( leaflet )
+library( viridis )
+library( geojsonio )
+library( sp )
+library( sf )
+library( tmap )
+library( pals )
+library( rgdal )
+
+####
+library(mclust)
+library(ggplot2)
+library(ggthemes)
+library(tidycensus)
+library(cartogram)
+library(maptools)
+library(stringr)
+library(fun)
+
+```
+
+
+
+```{r, include=FALSE}
+
+crosswalk <- read.csv( "https://raw.githubusercontent.com/DS4PS/cpp-529-master/master/data/cbsatocountycrosswalk.csv",  stringsAsFactors=F, colClasses="character" )
+
+# search for citie names by strings, use the ^ anchor for "begins with" 
+
+grep( "^TOL", crosswalk$msaname, value=TRUE ) 
+
+```
+
+
+
+```{r}
+these.tol <- crosswalk$msaname == "TOLEDO, OH"
+these.fips <- crosswalk$fipscounty[ these.tol ]
+these.fips <- na.omit( these.fips )
+
+head( these.fips ) %>% pander()
+```
+
+
+```{r}
+state.fips <- substr( these.fips, 1, 2 )
+county.fips <- substr( these.fips, 3, 5 )
+
+cbind( these.fips, state.fips, county.fips ) %>% pander()
+```
+
+```{r}
+tol.pop <-
+get_acs( geography = "tract", variables = "B01003_001",
+         state = "39", county = county.fips[state.fips=="39"], geometry = TRUE ) %>% 
+         select( GEOID, estimate ) %>%
+         rename( POP=estimate )
+```
+
+```{r}
+
+```
+
+
+
+
+```{r}
+
+tol <- tol.pop
+
+# make sure there are no empty polygons
+tol <- tol[ ! st_is_empty( tol ) , ]
+
+# convert sf map object to an sp version
+tol.sp <- as_Spatial( tol )
+
+class( tol.sp )
+
+```
+
+
+
+```{r}
+plot( tol.sp )
+```
+
+
+```{r}
+# project map and remove empty tracts
+tol.sp <- spTransform( tol.sp, CRS("+init=epsg:3395"))
+tol.sp <- tol.sp[ tol.sp$POP != 0 & (! is.na( tol.sp$POP )) , ]
+
+# convert census tract polygons to dorling cartogram
+
+tol.sp$pop.w <- tol.sp$POP / 9000    # standardizes it to max of 1.5
+tol_dorling <- cartogram_dorling( x=tol.sp, weight="pop.w", k=0.05 )
+plot( tol_dorling )
+
+```
+```{r}
+#class(tol_dorling)
+```
+
+```{r}
+# user-defined bounding box to move slocer to subjects 
+bb <- st_bbox( c( xmin =  -9401605, xmax = -9260415, 
+                  ymax = 5108999, ymin = 5003788 ), 
+               crs = st_crs("+init=epsg:3395"))
+
+tm_shape( tol_dorling, bbox=bb ) + 
+  tm_polygons( col="POP", n=10, style="quantile", palette="Spectral" ) +
+  tm_layout( "Dorling Cartogram", title.position=c("right","top") )
+
+```
+
+
+
+```{r}
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+"phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+"pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+"pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+"p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+#eman
+
+dat1 <- tol_dorling@data
+
+URL <- "https://github.com/DS4PS/cpp-529-master/raw/master/data/ltdb_std_2010_sample.rds"
+census.dat <- readRDS(gzcon(url( URL )))
+
+# can merge an sf object and data.frame
+dat1 <- merge( dat1, census.dat, by.x="GEOID", by.y="tractid" )
+
+
+dat2 <- select( dat1, keep.these )
+dat3 <- apply( dat2, 2, scale )
+head( dat3[,1:6] ) %>% pander()
+
+```
+
+
+```{r}
+set.seed( 1234 )
+fit <- Mclust( d3 )
+tol_dorling$cluster <- as.factor( fit$classification )
+summary( fit )
+```
+
+
+```{r}
+URL1 <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-2000.rds"
+d1 <- readRDS( gzcon( url( URL1 ) ) )
+
+URL2 <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-2010.rds"
+d2 <- readRDS( gzcon( url( URL2 ) ) )
+
+URLmd <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-META-DATA.rds"
+md <- readRDS( gzcon( url( URLmd ) ) )
+
+d1 <- select( d1, - year )
+d2 <- select( d2, - year )
+
+d <- merge( d1, d2, by="tractid" )
+d <- merge( d, md, by="tractid" )
+```
+
+
+```{r}
+d <- select( d, tractid, 
+             mhmval00, mhmval12, 
+             hinc00, 
+             hu00, vac00, own00, rent00, h30old00,
+             empclf00, clf00, unemp00, prof00,  
+             dpov00, npov00,
+             ag25up00, hs00, col00, 
+             pop00.x, nhwht00, nhblk00, hisp00, asian00,
+             cbsa, cbsaname )
+
+ 
+d <- 
+  d %>%
+  mutate( # percent white in 2000
+          p.white = 100 * nhwht00 / pop00.x,
+          # percent black in 2000
+          p.black = 100 * nhblk00 / pop00.x,
+          # percent hispanic in 2000
+          p.hisp = 100 * hisp00 / pop00.x, 
+          # percent asian in 2000
+          p.asian = 100 * asian00 / pop00.x,
+          # percent high school grads by age 25 in 2000 
+          p.hs = 100 * (hs00+col00) / ag25up00,
+          # percent pop with college degree in 2000
+          p.col = 100 * col00 / ag25up00,
+          # percent employed in professional fields in 2000
+          p.prof = 100 * prof00 / empclf00,
+          # percent unemployment  in 2000
+          p.unemp = 100 * unemp00 / clf00,
+          # percent of housing lots in tract that are vacant in 2000
+          p.vacant = 100 * vac00 / hu00,
+          # dollar change in median home value 2000 to 2010 
+          pov.rate = 100 * npov00 / dpov00 )
+
+
+# adjust 2000 home values for inflation 
+mhv.00 <- d$mhmval00 * 1.28855  
+mhv.10 <- d$mhmval12
+
+
+# change in MHV in dollars
+mhv.change <- mhv.10 - mhv.00
+
+
+# drop low 2000 median home values
+# to avoid unrealistic growth rates.
+#
+# tracts with homes that cost less than
+# $1,000 are outliers
+mhv.00[ mhv.00 < 1000 ] <- NA
+
+
+# change in MHV in percent
+mhv.growth <- 100 * ( mhv.change / mhv.00 )
+
+#Omit cases with growth rates above 200%.
+mhv.growth[ mhv.growth > 200 ] <- NA
+
+d$mhv.00 <- mhv.00
+d$mhv.10 <- mhv.10
+d$mhv.change <- mhv.change
+d$mhv.growth <- mhv.growth
+
+p.vacant<-d$p.asian
+p.unemp<-d$p.unemp
+p.asian<-d$p.asian
+```
+
+
+
+
+```{r}
+# STANDARDIZE GEO IDs
+
+# note the current geoid format for the LTDB census data: 
+# FIPS-STATE-COUNTY-TRACT:  fips-01-001-020100  
+
+x <- d$tractid 
+head( x )
+```
+
+```{r}
+
+# remove non-numeric strings 
+x <- gsub( "fips", "", x )
+x <- gsub( "-", "", x )
+head( x )
+```
+
+```{r}
+# drop leading zeros 
+x <- as.numeric( x )
+
+# remember to add the variable back to the census dataset
+d$tractid2 <- x 
+
+#???????????which line is correct?????? 
+tole <- merge( tol_dorling, d, by.x="GEOID", by.y="tractid", all.x=T ) 
+#tol <- merge( tol, d, by.x="GEOID", by.y="tractid", all.x=T )
+head(tole@data) %>% pander()
+```
+
+
+```{r}
+names(tole) %>% sort()
+```
+
+
+```{r}
+# data frame and polygon ID standardization in case a tract was dropped and IDs don't match
+row.ids <- sapply( slot( tole, "polygons" ), function(x) slot( x, "ID" ) )
+row.names( tole ) <- row.ids
+
+```
+
+
+```{r}
+# project to standard lat-lon coordinate system 
+tole <- spTransform( tole, CRS("+proj=longlat +datum=WGS84") )
+
+# write to file 
+geojson_write( tole, file="Toledo_dorling.geojson", geometry="polygon" )
+
+```
+
+
+
+```{r, include=FALSE}
+
+# DATA STEPS 
+
+# load dorling cartogram from github
+# map already contains census data and groups from clustering 
+
+github.url <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/data/phx_dorling.geojson"
+tol <- geojson_read( x=github.url,  what="sp" )
+
+# reproject the map 
+tol2 <- spTransform( tol, CRS("+init=epsg:3395") )
+
+# convert the sp map format to 
+# an sf (simple features) format:
+# ggmap requires the sf format
+tol.sf <- st_as_sf( tol2 )
+
+# separate out the data frame from the map
+d <- as.data.frame( tol.sf )
+
+
+
+```
+
+
+Community Demographics  
+=====================================  
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+these.variables <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+"phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+"pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+"pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+"p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+
+# replace these with descriptive labels 
+# from the data dictionary 
+temp.names <- paste0( "Variable ", these.variables )
+
+radioButtons( inputId="demographics", 
+              label = h3("Census Variables"),
+              # choices = these.variables, 
+              choiceNames=temp.names,
+              choiceValues=these.variables,
+              selected="pnhwht12")
+
+
+
+# Adding interpretable variable names
+# from the data dictionary:
+# add a name attribute for each variable
+# 
+# value <- c(1,2,3)
+# dd.name <- c("one","two","three")
+# 
+# x <- dd.name
+# names(x) <- value
+#
+# dd names and values linked
+# names( x[2] )
+#
+# can now get the label using the value
+# using the name attributes 
+# x[ "two" ]
+#
+# to add labels to the maps
+# use the radio button value 
+# to get the data dictionary label: 
+#
+# x[ input$demographics ]
+```
+
+
+
+Row {.tabset}
+-------------------------------------
+
+
+### Choropleth Map
+
+
+```{r}
+
+renderPlot({
+
+# split the selected variable into deciles 
+  
+get_data <- 
+  reactive({
+             tol.sf <- 
+             tol.sf %>% 
+             mutate( q = ntile( get(input$demographics), 10 ) )  
+          })
+
+  
+ggplot( get_data() ) +
+    geom_sf( aes( fill = q ), color=NA ) +
+    coord_sf( datum=NA ) +
+    labs( title = paste0( "Choropleth of Select Demographics: ", toupper(input$demographics) ),
+          caption = "Source: Harmonized Census Files",
+          fill = "Population Deciles" ) +
+    scale_fill_gradientn( colours=rev(ocean.balance(10)), guide = "colourbar" ) + 
+    xlim( xmin = -12519146, xmax = -12421368 ) + 
+    ylim( ymin = 3899074, ymax = 3965924 )
+
+})
+
+```
+
+
+### Variable Distribution 
+
+```{r}
+renderPlot({
+
+# extract vector x from the data frame 
+# x <-  d[ "pnhwht12" ] %>% unlist()
+
+  
+get_variable_x <- reactive({ d[ input$demographics ] })
+
+x <- get_variable_x() %>% unlist()
+
+cut.points <- quantile( x, seq( 0, 1, 0.1 ) )
+
+hist( x, breaks=50, 
+      col="gray", border="white", yaxt="n",
+      main=paste0( "Histogram of variable ", toupper( input$demographics ) ),
+      xlab="red lines represent decile cut points" )
+
+abline( v=cut.points, col="darkred", lty=3, lwd=2 )
+
+
+})
+```
+
+
+
+
+Neighborhoods  
+===================================== 
+
+### Clusters  
+
+```{r}
+
+# define the bounding box corners 
+bb <- st_bbox( c( xmin = -12519146, xmax = -12421368, 
+                  ymax = 3965924, ymin = 3899074 ), 
+               crs = st_crs("+init=epsg:3395"))
+
+
+# ADD YOUR CUSTOM LABELS TO THE CLUSTERS 
+
+tol2$cluster[ tol2$cluster == "1" ] <- "Baby Boomers"
+tol2$cluster[ tol2$cluster == "2" ] <- "Hipsters"
+
+
+
+renderTmap({
+
+tmap_mode("view")
+tm_basemap( "CartoDB.Positron" )
+tm_shape( phx2, bbox=bb ) + 
+  tm_polygons( col="cluster", palette="Accent",
+               title="Community Types" ) 
+
+})
+```
+
+
+
+
+NH Change 2000-2010  
+===================================== 
+
+
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+
+button.labels <- c("Median Home Value 2000","Median Home Value 2010","Value Change 2000-2010","Growth in Home Value")
+button.values <- c("mhv.2000","mhv.2010","mhv.change","mhv.growth")
+  
+radioButtons( inputId="home.value", 
+              label = h3("Home Values"),
+              # choices = these.variables, 
+              choiceNames=button.labels,
+              choiceValues=button.values,
+              selected="mhv.2000")
+
+```
+
+
+
+
+Row {.tabset}
+-------------------------------------
+
+
+
+### Median Home Values
+
+
+```{r}
+
+renderPlot({
+
+# split the selected variable into deciles 
+  
+get_data <- 
+  reactive({
+             tol.sf <- 
+             tol.sf %>% 
+             mutate( q = ntile( get(input$home.value), 10 ) )  
+          })
+
+  
+ggplot( get_data() ) +
+    geom_sf( aes( fill = q ), color=NA ) +
+    coord_sf( datum=NA ) +
+    labs( title = paste0( "Spatial Distribution of Home Values: ", toupper(input$demographics) ),
+          caption = "Source: Harmonized Census Files",
+          fill = "Home Value Deciles" ) +
+    scale_fill_gradientn( colours=rev(ocean.balance(10)), guide = "colourbar" ) + 
+    xlim( xmin = -12519146, xmax = -12421368 ) + 
+    ylim( ymin = 3899074, ymax = 3965924 )
+
+})
+
+```
+
+
+### Variable Distribution 
+
+```{r}
+renderPlot({
+
+# extract vector x from the data frame 
+# x <-  d[ "pnhwht12" ] %>% unlist()
+
+  
+get_variable_x <- reactive({ d[ input$home.value ] })
+
+x <- get_variable_x() %>% unlist() %>% as.numeric()
+
+cut.points <- quantile( x, seq( 0, 1, 0.1 ) )
+
+hist( x, breaks=50, 
+      col="gray", border="white", yaxt="n",
+      main=paste0( "Histogram of ", toupper( input$home.value ) ),
+      xlab="red lines represent decile cut points" )
+
+abline( v=cut.points, col="darkred", lty=3, lwd=2 )
+
+
+})
+```  
+
+
+
+
+
+
+
+Drivers of Change   
+===================================== 
+
+
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+
+button.labels <- c("Median Home Value 2000","Median Home Value 2010","Value Change 2000-2010","Growth in Home Value")
+button.values <- c("mhv.2000","mhv.2010","mhv.change","mhv.growth")
+  
+radioButtons( inputId="dv", 
+              label = h3("Select Your Dependent Variable"),
+              choiceNames=button.labels,
+              choiceValues=button.values,
+              selected="mhv.change")
+
+
+covariates <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+"phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+"pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+"pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+"p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+# covariate.labels <- c( ... )
+
+checkboxGroupInput( inputId="covariates", 
+              label = h3("Select Variables for Your Model"),
+              choices = covariates,
+              # choiceNames=covariate.labels,
+              # choiceValues=covariates,
+              selected=c("pnhwht12","pprof12","pvac12") )
+
+```
+
+
+
+
+Row {.tabset}
+-------------------------------------
+
+
+
+### Predicting Change 
+
+```{r, results="asis"}
+
+# RUNNING A REGRESSION WITH USER INPUTS
+#
+# create a formula object
+# by constructing the formula from user selections 
+# as a string then casting as a formula object 
+# x.s <- c("x1","x2","x3" )
+# formula.text <- paste( "y", " ~ ", paste0( x.s, collapse=" + ") )
+# formula.object <- as.formula( formula.text )
+#
+# lm( formula.object, data=d )
+#
+# make sure all variables are in d
+
+
+  
+# check boxes return vectors 
+get_covariates <-  reactive({ input$covariates })
+
+
+renderUI({
+  
+covariates <- get_covariates() 
+
+formula.text <- paste0( "mhmval12", " ~ ", paste( covariates, collapse=" + " ) )
+fo <- as.formula( formula.text )
+
+m <- lm( fo, data=d )
+
+
+# HTML( "<div style='width: 60%; margin: 0px auto;'>" )
+HTML( 
+  
+  c("<br><br><br>",
+  "<div type='regression' style='width: 60%; margin: 0px auto;'>",
+  stargazer( m, type="html", omit.stat=c("rsq","f") ),
+  "</div>",
+  "<br><br><br>"
+  )
+  
+  )
+
+
+})
+
+# HTML( reg.table )
+```
+
+
+
+### Correlation Plots 
+
+```{r}
+pairs( iris )
+```
+
+
+
+
+
+<style>
+
+.chart-shim { overflow: auto; }
+ 
+table{
+   border-spacing:1px;
+   margin-top:30px;
+   margin-bottom:30px;
+   margin-left: auto;
+   margin-right: auto;
+   align:center} 
+
+td{ padding: 6px 10px 6px 10px } 
+
+th{ text-align: left; } 
+
+</style>
